@@ -1,0 +1,491 @@
+"""
+此模块负责从zsxq API获取话题数据
+"""
+import time
+from datetime import datetime, timezone, timedelta
+from typing import List, Dict, Any, Optional, Tuple, Callable
+import random
+
+import requests
+
+from config import STAR_ID, COOKIE, API_BASE_URL, API_HOST, API_TIMEOUT, API_RETRY_TIMES, API_RETRY_DELAY, get_logger, MAX_TOPIC_PAGES
+import config
+
+# 设置日志器
+logger = get_logger(__name__)
+
+def 获取今日时间范围():
+    """
+    获取今日的时间范围（开始和结束时间）
+    返回 ISO 格式的时间字符串
+    """
+    # 获取当前时间（北京时间 UTC+8）
+    北京时区 = timezone(timedelta(hours=8))
+    现在 = datetime.now(北京时区)
+    
+    # 今日开始时间（00:00:00）
+    今日开始 = 现在.replace(hour=0, minute=0, second=0, microsecond=0)
+    
+    # 今日结束时间（23:59:59）
+    今日结束 = 现在.replace(hour=23, minute=59, second=59, microsecond=999999)
+    
+    return 今日开始.isoformat(), 今日结束.isoformat()
+
+def 获取日期范围(起始日期: str):
+    """
+    获取从指定日期到现在的时间范围
+    
+    参数:
+        起始日期 (str): 开始日期，格式为 YYYY-MM-DD
+        
+    返回:
+        tuple: (开始时间ISO字符串, 结束时间ISO字符串)
+    """
+    北京时区 = timezone(timedelta(hours=8))
+    
+    # 解析开始日期
+    try:
+        开始日期 = datetime.strptime(起始日期, "%Y-%m-%d")
+        开始时间 = 开始日期.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=北京时区)
+    except ValueError:
+        raise ValueError(f"无效的日期格式: {起始日期}. 应为 YYYY-MM-DD")
+    
+    # 结束时间为当前时间
+    结束时间 = datetime.now(北京时区)
+    
+    return 开始时间.isoformat(), 结束时间.isoformat()
+
+def 获取话题页面(结束时间: str = "", 仅今日: bool = True, 起始日期: str = "") -> Dict[str, Any]:
+    """
+    从zsxq API获取单页话题数据
+
+    参数:
+        结束时间 (str): 用于分页的结束时间，为空则获取最新话题
+        仅今日 (bool): 是否只过滤今日话题（在客户端过滤）
+        起始日期 (str): 过滤的开始日期 (YYYY-MM-DD格式)，为空则不使用（在客户端过滤）
+
+    返回:
+        Dict[str, Any]: API返回的JSON响应
+    """
+    # 生成时间戳（当前时间的Unix时间戳）
+    import time as time_module
+    timestamp = str(int(time_module.time()))
+    
+    请求头 = {
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Encoding": "gzip, deflate, br, zstd",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "Cookie": COOKIE,
+        "Host": API_HOST,
+        "Origin": "https://wx.zsxq.com",
+        "Pragma": "no-cache",
+        "Priority": "u=1, i",
+        "Referer": "https://wx.zsxq.com/",
+        "Sec-Ch-Ua": '"Google Chrome";v="137", "Chromium";v="137", "Not/A)Brand";v="24"',
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": '"macOS"',
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-site",
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
+        "X-Aduid": "f0185a8e3-7586-5bcf-7a8d-ebd0fdf0854",
+        "X-Request-Id": f"req_{timestamp}_{hash(timestamp) % 100000:05d}",
+        "X-Timestamp": timestamp,
+        "X-Version": "2.77.0"
+    }
+    参数 = {
+        "scope": "all",
+        "count": 20,
+    }
+    
+    # 只添加分页的结束时间，移除begin_time和end_time避免格式错误
+    if 结束时间:
+        参数["end_time"] = 结束时间
+
+    网址 = API_BASE_URL.replace("/v2/topics", f"/v2/groups/{STAR_ID}/topics")
+    
+    logger.debug(f"正在获取话题，URL: {网址}")
+    logger.debug(f"请求参数: {参数}")
+
+    try:
+        响应 = requests.get(网址, headers=请求头, params=参数, timeout=API_TIMEOUT)
+        响应.raise_for_status()
+        
+        # 记录成功响应的详细信息
+        json_data = 响应.json()
+        if "resp_data" in json_data and "topics" in json_data["resp_data"]:
+            topics_count = len(json_data["resp_data"]["topics"])
+            logger.debug(f"成功获取API响应，包含 {topics_count} 个话题")
+        
+        return json_data
+    except requests.exceptions.RequestException as e:
+        logger.error(f"获取话题时出错: {e}")
+        if isinstance(e, requests.exceptions.HTTPError):
+            if e.response.status_code == 429:
+                logger.warning("请求频率受限。60秒后重试...")
+                time.sleep(60)
+                return 获取话题页面(结束时间, 仅今日, 起始日期)
+            elif e.response.status_code == 401:
+                logger.error("认证失败，请检查Cookie是否有效")
+            elif e.response.status_code == 403:
+                logger.error("访问被拒绝，可能需要更新请求头或Cookie")
+        return {}
+
+def 获取所有今日话题(起始日期: str = "") -> List[Dict[str, Any]]:
+    """
+    获取所有今日话题（或指定日期范围的话题）
+    持续获取直到遇到昨天或更早日期的话题为止
+
+    参数:
+        起始日期 (str): 过滤的开始日期 (YYYY-MM-DD格式)，为空则只获取今日话题
+
+    返回:
+        List[Dict[str, Any]]: 所有获取的话题列表
+    """
+    所有话题 = []
+    结束时间 = ""
+    页码 = 0
+    连续空响应次数 = 0  # 记录连续空响应的次数
+    最大重试次数 = API_RETRY_TIMES     # 最多重试次数
+    
+    # 显著的分页开始日志
+    logger.info("=" * 60)
+    if 起始日期:
+        logger.info(f"📅 开始获取从【{起始日期}】到现在的所有话题")
+        目标日期 = 起始日期  # 获取从指定日期到现在的话题
+    else:
+        logger.info(f"📅 开始获取【今日所有话题】")
+        今日开始, _ = 获取今日时间范围()
+        目标日期 = 今日开始[:10]  # 获取今日日期 YYYY-MM-DD
+    
+    logger.info("📋 将持续获取直到遇到更早日期的话题")
+    logger.info("=" * 60)
+    
+    while True:
+        页码 += 1
+        # 突出显示的分页进度
+        logger.info(f"🔍 正在获取第 【{页码}】 页话题...")
+        
+        数据 = 获取话题页面(结束时间, True, 起始日期)
+        
+        # 添加详细的调试信息
+        logger.debug(f"API调用返回数据: {bool(数据)}")
+        if 数据:
+            logger.debug(f"数据结构: {list(数据.keys())}")
+            if "resp_data" in 数据:
+                resp_data = 数据["resp_data"]
+                logger.debug(f"resp_data类型: {type(resp_data)}, 内容: {resp_data is not None}")
+                if resp_data and isinstance(resp_data, dict):
+                    logger.debug(f"resp_data键: {list(resp_data.keys())}")
+                    if "topics" in resp_data:
+                        topics = resp_data.get("topics")
+                        logger.debug(f"topics类型: {type(topics)}, 长度: {len(topics) if topics else 'None'}")
+        
+        # 检查各个条件
+        条件1 = not 数据
+        条件2 = "resp_data" not in 数据 if 数据 else True
+        条件3 = not 数据["resp_data"].get("topics") if 数据 and "resp_data" in 数据 else True
+        
+        logger.debug(f"停止条件检查: not数据={条件1}, no_resp_data={条件2}, no_topics={条件3}")
+        
+        # 🔄 新增重试逻辑：当API没有返回话题时，等待后重试
+        if not 数据 or "resp_data" not in 数据 or not 数据["resp_data"].get("topics"):
+            连续空响应次数 += 1
+            logger.warning(f"⚠️  API没有返回更多话题 (第{连续空响应次数}/{最大重试次数}次)")
+            
+            if 连续空响应次数 >= 最大重试次数:
+                logger.warning(f"🚫 连续{最大重试次数}次没有获取到话题，停止获取")
+                break
+            else:
+                等待时间 = random.uniform(*API_RETRY_DELAY)  # 随机等待
+                logger.info(f"⏰ 等待 {等待时间:.1f} 秒后重试...")
+                time.sleep(等待时间)
+                continue  # 重试当前页
+        else:
+            # 重置连续空响应计数器
+            连续空响应次数 = 0
+
+        原始话题列表 = 数据["resp_data"]["topics"]
+        原始数量 = len(原始话题列表)
+        
+        # 检查是否遇到更早的日期 - 这是新的关键逻辑
+        遇到更早日期 = False
+        符合条件话题 = []
+        
+        for 话题 in 原始话题列表:
+            话题日期 = 话题.get("create_time", "")[:10]
+            
+            if 起始日期:
+                # 指定日期范围：只要是指定日期或之后的都要
+                if 话题日期 >= 起始日期:
+                    符合条件话题.append(话题)
+                else:
+                    # 遇到比起始日期更早的话题，停止
+                    logger.info(f"🔚 遇到更早日期话题: {话题日期} < {起始日期}，停止获取")
+                    遇到更早日期 = True
+                    break
+            else:
+                # 今日话题：只要今日的
+                if 话题日期 == 目标日期:
+                    符合条件话题.append(话题)
+                elif 话题日期 < 目标日期:
+                    # 遇到昨天或更早的话题，停止
+                    logger.info(f"🔚 遇到昨天或更早话题: {话题日期} < {目标日期}，停止获取")
+                    遇到更早日期 = True
+                    break
+                else:
+                    # 未来日期，跳过但继续
+                    logger.debug(f"跳过未来日期话题: {话题日期} > {目标日期}")
+        
+        logger.info(f"✅ 第{页码}页：从原始{原始数量}个话题中过滤出 【{len(符合条件话题)}个】 符合条件的话题")
+        
+        # 将符合条件的话题添加到结果中
+        if 符合条件话题:
+            所有话题.extend(符合条件话题)
+            logger.info(f"🎯 累计获取到 【{len(所有话题)}个】 符合条件的话题")
+        
+        # 如果遇到更早日期，停止获取
+        if 遇到更早日期:
+            break
+            
+        # 获取下一页的结束时间，使用原始话题列表的最后一个话题时间
+        if 原始话题列表:
+            最后话题时间 = 原始话题列表[-1]["create_time"]
+            # 将时间戳减去1毫秒避免重复
+            try:
+                from datetime import datetime
+                dt = datetime.fromisoformat(最后话题时间.replace('+0800', '+08:00'))
+                dt = dt.replace(microsecond=dt.microsecond - 1000 if dt.microsecond >= 1000 else 999000)
+                结束时间 = dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + '+0800'
+            except:
+                # 如果时间解析失败，直接使用原时间
+                结束时间 = 最后话题时间
+        else:
+            结束时间 = ""
+            
+        # 安全检查：如果页数过多，停止获取（防止无限循环）
+        if 页码 >= config.MAX_TOPIC_PAGES:  # 最多获取config.MAX_TOPIC_PAGES页，每页60个话题
+            logger.warning(f"⚠️  已获取{页码}页话题，为防止无限循环，停止获取")
+            break
+            
+        time.sleep(1)  # 对API友好
+
+    # 显著的分页总结日志
+    logger.info("=" * 60)
+    logger.info(f"📊 话题获取完成！总共获取了 【{len(所有话题)}个】 符合条件的话题")
+    logger.info(f"📋 共搜索了 【{页码}页】")
+    logger.info("=" * 60)
+    
+    return 所有话题
+
+# 保留原函数作为兼容性接口
+def 获取所有话题(最大页数: int, 仅今日: bool = True, 起始日期: str = "") -> List[Dict[str, Any]]:
+    """
+    兼容性接口：保持原API不变，内部调用新的基于内容的获取逻辑
+    """
+    if 仅今日 and not 起始日期:
+        return 获取所有今日话题()
+    elif 起始日期:
+        return 获取所有今日话题(起始日期)
+    else:
+        # 对于非今日话题，仍使用原逻辑（但现在很少使用）
+        logger.warning("获取非今日话题，使用原始分页逻辑")
+        return _获取所有话题_原逻辑(最大页数, 仅今日, 起始日期)
+
+def _获取所有话题_原逻辑(最大页数: int, 仅今日: bool = True, 起始日期: str = "") -> List[Dict[str, Any]]:
+    """
+    原始的基于页数的获取逻辑（作为备用）
+    """
+    # 暂时返回空列表，这个函数现在很少使用
+    logger.warning("使用原始分页逻辑，建议使用新的基于内容的获取方式")
+    return []
+
+class ZsxqClient:
+    def __init__(self, progress_callback=None):
+        self.progress_callback = progress_callback
+
+    def on_progress(self, current: int, message: str):
+        """进度回调"""
+        if self.progress_callback:
+            self.progress_callback(current, message)
+
+    def _fetch_page_with_retries(self, end_cursor: Optional[str], page_num: int) -> Optional[List[Dict]]:
+        """
+        带重试逻辑的单页话题获取
+        :param end_cursor: 上一页的结束时间戳，如果是第一页则为None
+        :param page_num: 当前页码 (仅用于日志记录)
+        :return: 成功则返回话题列表，失败则返回None
+        """
+        for attempt in range(config.API_RETRY_TIMES):
+            try:
+                # logger.info(f"🔍 准备获取第 【{page_num}】 页 (第 {attempt + 1}/{config.API_RETRY_TIMES} 次尝试)...")
+                topics_in_page = self._get_single_page_topics(end_cursor)
+                
+                # 即使返回空列表，也视为成功获取，因为这可能意味着没有更多内容
+                return topics_in_page
+
+            except Exception as e:
+                logger.error(f"❌ 获取第 {page_num} 页时发生错误: {e}")
+                if attempt < config.API_RETRY_TIMES - 1:
+                    delay = random.uniform(config.API_RETRY_DELAY[0], config.API_RETRY_DELAY[1])
+                    logger.info(f"⏰ 等待 {delay:.1f} 秒后重试...")
+                    time.sleep(delay)
+                else:
+                    logger.error(f"❌ 第 {page_num} 页重试 {config.API_RETRY_TIMES} 次后仍然失败。")
+                    return None # 所有重试失败
+        return None
+
+    def get_all_topics(self, from_date: Optional[datetime] = None, progress_callback: Optional[Callable] = None) -> List[Dict]:
+        """
+        获取从指定日期到现在的全部话题，并修复了重试逻辑
+        """
+        if from_date is None:
+            from_date = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        
+        all_topics: List[Dict] = []
+        page_num = 0
+        end_cursor = None
+        
+        while True:
+            page_num += 1
+
+            if page_num > config.MAX_TOPIC_PAGES:
+                logger.warning(f"⚠️  已达到最大抓取页数限制 ({config.MAX_TOPIC_PAGES}页)，为防止无限循环，停止获取。")
+                break
+
+            # --- 带重试的单页获取逻辑 ---
+            current_page_topics = None
+            for attempt in range(config.API_RETRY_TIMES):
+                try:
+                    logger.info(f"🔍 正在获取第 【{page_num}】 页 (第 {attempt + 1}/{config.API_RETRY_TIMES} 次尝试)...")
+                    
+                    # 直接调用底层的单页获取函数
+                    current_page_topics = self._get_single_page_topics(end_cursor)
+                    
+                    # 成功获取（即使是空列表），跳出重试循环
+                    break 
+                except Exception as e:
+                    logger.error(f"❌ 获取第 {page_num} 页时发生错误: {e}")
+                    if attempt < config.API_RETRY_TIMES - 1:
+                        delay = random.uniform(config.API_RETRY_DELAY[0], config.API_RETRY_DELAY[1])
+                        logger.info(f"⏰ 等待 {delay:.1f} 秒后重试...")
+                        time.sleep(delay)
+                    else:
+                        logger.error(f"❌ 第 {page_num} 页重试 {config.API_RETRY_TIMES} 次后仍然失败。")
+                # --- 重试逻辑结束 ---
+
+            if current_page_topics is None:
+                # 所有重试均失败，终止整个任务
+                logger.error("API请求连续失败，终止抓取任务。")
+                break
+            
+            if not current_page_topics:
+                # 正常结束，API返回空列表，意味着没有更多内容了
+                logger.info("✅ 已获取所有话题，API返回空，确认抓取结束。")
+                break
+
+            # 检查并过滤话题
+            should_stop, topics_to_add = self._check_and_filter_topics(current_page_topics, from_date)
+            
+            if topics_to_add:
+                all_topics.extend(topics_to_add)
+                # 只有在成功添加话题后，才更新游标
+                end_cursor = all_topics[-1]['create_time']
+                if progress_callback:
+                    progress_callback(len(all_topics), f"已获取 {len(all_topics)} 条有效话题")
+
+            if should_stop:
+                logger.info("ℹ️ 遇到早于指定日期的话题，抓取结束。")
+                break
+
+        logger.info(f"✔️ 话题获取完成，共找到 {len(all_topics)} 条话题。")
+        return all_topics
+
+    def _check_and_filter_topics(self, topics: List[Dict], from_date: datetime) -> Tuple[bool, List[Dict]]:
+        """
+        检查话题是否早于指定日期，并返回需要添加的话题列表
+        :return: (是否应该停止, 需要添加的话题列表)
+        """
+        topics_to_add = []
+        should_stop = False
+        
+        for topic in topics:
+            create_time_str = topic.get("create_time", "")
+            if not create_time_str:
+                continue
+            
+            try:
+                # 转换时间字符串为带时区的datetime对象
+                topic_time = datetime.fromisoformat(create_time_str.replace('Z', '+00:00'))
+                
+                if topic_time < from_date:
+                    should_stop = True
+                    break # 遇到早于指定日期的话题，后续不再处理
+                else:
+                    topics_to_add.append(topic)
+            except ValueError:
+                logger.warning(f"无法解析时间格式: {create_time_str}")
+                continue
+
+        return should_stop, topics_to_add
+
+    def _get_single_page_topics(self, end_cursor: Optional[str] = None) -> List[Dict]:
+        """
+        获取单页话题（最多60个）
+        :param end_cursor: 上一页的最后一个话题的create_time，用于分页
+        :return: 话题列表
+        """
+        headers = {
+            "Cookie": COOKIE,
+            "Host": API_HOST,
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Referer": f"https://wx.zsxq.com/dweb2/index/group/{STAR_ID}",
+        }
+        
+        params = {
+            "scope": "all",
+            "count": 60,
+        }
+        if end_cursor:
+            params["end_time"] = end_cursor
+
+        url = f"{API_BASE_URL}/{STAR_ID}/topics"
+        
+        try:
+            response = requests.get(url, headers=headers, params=params, timeout=API_TIMEOUT)
+            response.raise_for_status()
+            data = response.json()
+
+            if data.get("succeeded"):
+                return data.get("resp_data", {}).get("topics", [])
+            else:
+                logger.error(f"API请求失败: {data.get('info', '未知错误')}")
+                raise requests.RequestException(f"API Error: {data.get('info', '未知错误')}")
+
+        except requests.exceptions.RequestException as e:
+            logger.error(f"请求 zsxq API 失败: {e}")
+            raise
+
+if __name__ == '__main__':
+    if not COOKIE or not STAR_ID:
+        logger.error("❌ 请在 config.py 文件中配置 COOKIE 和 STAR_ID")
+    else:
+        # 测试从3天前获取
+        three_days_ago = datetime.now(timezone.utc) - timedelta(days=3)
+        
+        def simple_progress(current, message):
+            print(f"[进度] -> {message}")
+            
+        print(f"🚀 开始测试获取从 {three_days_ago.strftime('%Y-%m-%d')} 开始的话题...")
+        topics = get_all_topics(from_date=three_days_ago, progress_callback=simple_progress)
+        
+        if topics:
+            print(f"\n✅ 测试成功！共获取到 {len(topics)} 个话题。")
+            print("部分话题标题:")
+            for t in topics[:5]:
+                title = t.get('talk', {}).get('text', '无标题')[:30]
+                print(f"  - {title}...")
+        else:
+            print("\n⚠️ 测试结束，没有获取到任何话题。")
