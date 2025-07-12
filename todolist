@@ -1,0 +1,40 @@
+# 🎯 项目策划与待办事项 (Project Roadmap & Todolist)
+
+本文档旨在为『智能投资话题抽取系统』的未来发展提供一个清晰的路线图和可执行的待办事项列表。
+
+---
+
+
+### ✅ 任务4: 新增导出为Word（.doc/.docx）功能
+- **目标**: 支持将分析结果自动导出为格式化的Word文档（.docx），实现与Excel导出同等体验，便于报告归档和分享。
+- **分步执行清单**:
+    1. **依赖准备**
+        - [ ] 在 `requirements.txt` 添加 `python-docx`。
+    2. **新建转换模块**
+        - [ ] 创建 `to_word_converter.py` 文件。
+        - [ ] 实现 `process_csv_to_word(input_csv: str, output_docx: str)`，支持从CSV导出Word。
+        - [ ] 实现 `process_excel_to_word(input_excel: str, output_docx: str)`，支持从Excel导出Word。
+    3. **格式与样式实现**
+        - [ ] 标题加粗16号，主字段加粗，正文13号，行距1.3，字体“等线”或“宋体”。
+        - [ ] 字段顺序、分组、分段与Excel一致。
+        - [ ] 每条话题/每个日期自动分页。
+        - [ ] 支持长文本自动换行。
+        - [ ] 兼容“板块-标的对”与“价格模式”两种结构。
+    4. **命令行工具**
+        - [ ] `to_word_converter.py` 支持如下命令：
+                python3 to_word_converter.py --input path/to/file.csv --output path/to/file.docx
+            - [ ] 支持 `--from-excel` 参数。
+    5. **主流程集成**
+        - [ ] 在 `config.py` 增加 `AUTO_CONVERT_TO_WORD = True`。
+        - [ ] 在 `main.py` 检查该配置，自动调用Word导出。
+        - [ ] 增加 `--export-docx` 参数，允许用户强制导出Word。
+        - [ ] Word文件输出路径与Excel一致，仅扩展名不同。
+    7. **异常与日志**
+        - [ ] 生成Word时如遇异常，详细日志记录，主流程不中断。
+    8. **测试用例**
+        - [ ] 新建 `tests/test_word_converter.py`，覆盖字段完整性、分页、样式、异常等。
+    9. **文档与示例**
+        - [ ] 在 `README.md` 增加Word导出说明、示例、常见问题。
+
+---
+

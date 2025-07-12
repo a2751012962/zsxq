@@ -4,11 +4,12 @@
 import time
 from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Any
+import random
 
 import requests
 
-from config import STAR_ID, COOKIE, API_BASE_URL, API_HOST, API_TIMEOUT, API_RETRY_TIMES, API_RETRY_DELAY, get_logger
-import config
+from config import STAR_ID, COOKIE, API_BASE_URL, API_HOST, API_TIMEOUT, API_RETRY_TIMES, API_RETRY_DELAY, MAX_TOPIC_PAGES
+from utils import get_logger
 
 # 设置日志器
 logger = get_logger(__name__)
@@ -104,33 +105,47 @@ def 获取话题页面(结束时间: str = "", 仅今日: bool = True, 起始日
         参数["end_time"] = 结束时间
 
     网址 = API_BASE_URL.replace("/v2/topics", f"/v2/groups/{STAR_ID}/topics")
-    
-    logger.debug(f"正在获取话题，URL: {网址}")
-    logger.debug(f"请求参数: {参数}")
 
-    try:
-        响应 = requests.get(网址, headers=请求头, params=参数, timeout=API_TIMEOUT)
-        响应.raise_for_status()
-        
-        # 记录成功响应的详细信息
-        json_data = 响应.json()
-        if "resp_data" in json_data and "topics" in json_data["resp_data"]:
-            topics_count = len(json_data["resp_data"]["topics"])
-            logger.debug(f"成功获取API响应，包含 {topics_count} 个话题")
-        
-        return json_data
-    except requests.exceptions.RequestException as e:
-        logger.error(f"获取话题时出错: {e}")
-        if isinstance(e, requests.exceptions.HTTPError):
-            if e.response.status_code == 429:
-                logger.warning("请求频率受限。60秒后重试...")
-                time.sleep(60)
-                return 获取话题页面(结束时间, 仅今日, 起始日期)
-            elif e.response.status_code == 401:
-                logger.error("认证失败，请检查Cookie是否有效")
-            elif e.response.status_code == 403:
-                logger.error("访问被拒绝，可能需要更新请求头或Cookie")
-        return {}
+    for attempt in range(API_RETRY_TIMES):
+        try:
+            logger.debug(f"正在获取话题 (尝试 {attempt + 1}/{API_RETRY_TIMES})，URL: {网址}")
+            logger.debug(f"请求参数: {参数}")
+            
+            响应 = requests.get(网址, headers=请求头, params=参数, timeout=API_TIMEOUT)
+            
+            # 永久性错误，直接失败，不重试
+            if 响应.status_code in [401, 403]:
+                logger.error(f"API请求失败，状态码: {响应.status_code}。请检查Cookie或权限。停止重试。")
+                return {}
+
+            # 其他客户端或服务器错误，触发重试
+            响应.raise_for_status()
+            
+            # 成功获取响应
+            json_data = 响应.json()
+            if "resp_data" in json_data and "topics" in json_data["resp_data"]:
+                topics_count = len(json_data["resp_data"]["topics"])
+                logger.debug(f"成功获取API响应，包含 {topics_count} 个话题")
+            return json_data
+
+        except requests.exceptions.RequestException as e:
+            logger.warning(f"获取话题时出错 (尝试 {attempt + 1}/{API_RETRY_TIMES}): {e}")
+            
+            if attempt < API_RETRY_TIMES - 1:
+                sleep_time = random.uniform(*API_RETRY_DELAY)
+                # 如果是429，则等待更长时间
+                if isinstance(e, requests.exceptions.HTTPError) and e.response.status_code == 429:
+                    sleep_time = 60
+                    logger.warning(f"请求频率受限 (429)，将在 {sleep_time} 秒后重试...")
+                else:
+                    logger.info(f"将在 {sleep_time:.1f} 秒后重试...")
+                
+                time.sleep(sleep_time)
+            else:
+                logger.error(f"经过 {API_RETRY_TIMES} 次尝试后，获取话题失败。")
+
+    return {}
+
 
 def 获取所有今日话题(起始日期: str = "") -> List[Dict[str, Any]]:
     """
@@ -145,7 +160,7 @@ def 获取所有今日话题(起始日期: str = "") -> List[Dict[str, Any]]:
     """
     所有话题 = []
     结束时间 = ""
-    页码 = 0
+    页码 = 1  # 从第1页开始
     连续空响应次数 = 0  # 记录连续空响应的次数
     最大重试次数 = API_RETRY_TIMES     # 最多重试次数
     
@@ -163,8 +178,6 @@ def 获取所有今日话题(起始日期: str = "") -> List[Dict[str, Any]]:
     logger.info("=" * 60)
     
     while True:
-        页码 += 1
-        # 突出显示的分页进度
         logger.info(f"🔍 正在获取第 【{页码}】 页话题...")
         
         数据 = 获取话题页面(结束时间, True, 起始日期)
@@ -198,15 +211,13 @@ def 获取所有今日话题(起始日期: str = "") -> List[Dict[str, Any]]:
                 logger.warning(f"🚫 连续{最大重试次数}次没有获取到话题，停止获取")
                 break
             else:
-                import random
                 等待时间 = random.uniform(*API_RETRY_DELAY)  # 随机等待
                 logger.info(f"⏰ 等待 {等待时间:.1f} 秒后重试...")
                 time.sleep(等待时间)
-                continue  # 重试当前页
-        else:
-            # 重置连续空响应计数器
-            连续空响应次数 = 0
-
+                continue  # 重试当前页，页码不会增加
+        
+        # 成功获取数据后，重置计数器并处理数据
+        连续空响应次数 = 0
         原始话题列表 = 数据["resp_data"]["topics"]
         原始数量 = len(原始话题列表)
         
@@ -265,9 +276,12 @@ def 获取所有今日话题(起始日期: str = "") -> List[Dict[str, Any]]:
         else:
             结束时间 = ""
             
+        # 成功处理完一页后，页码加1，准备获取下一页
+        页码 += 1
+            
         # 安全检查：如果页数过多，停止获取（防止无限循环）
-        if 页码 >= config.MAX_TOPIC_PAGES:  # 最多获取config.MAX_TOPIC_PAGES页，每页60个话题
-            logger.warning(f"⚠️  已获取{页码}页话题，为防止无限循环，停止获取")
+        if 页码 > MAX_TOPIC_PAGES:
+            logger.warning(f"⚠️  已获取{页码 - 1}页话题，达到最大页数限制({MAX_TOPIC_PAGES})，停止获取")
             break
             
         time.sleep(1)  # 对API友好
@@ -275,7 +289,7 @@ def 获取所有今日话题(起始日期: str = "") -> List[Dict[str, Any]]:
     # 显著的分页总结日志
     logger.info("=" * 60)
     logger.info(f"📊 话题获取完成！总共获取了 【{len(所有话题)}个】 符合条件的话题")
-    logger.info(f"📋 共搜索了 【{页码}页】")
+    logger.info(f"📋 共搜索了 【{页码 - 1}页】")
     logger.info("=" * 60)
     
     return 所有话题

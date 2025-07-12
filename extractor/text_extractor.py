@@ -4,7 +4,7 @@
 import re
 from typing import Dict, Any, Optional
 
-from config import get_logger
+from utils import get_logger
 
 # 设置日志器
 logger = get_logger(__name__)

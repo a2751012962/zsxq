@@ -5,7 +5,8 @@ import json
 from typing import Dict, Optional, List, Tuple, Union, Any
 
 from openai import OpenAI
-from config import OPENAI_API_KEY, OPENAI_API_BASE, OPENAI_MODEL, TEMPERATURE, FINANCE, get_logger
+from config import OPENAI_API_KEY, OPENAI_API_BASE, OPENAI_MODEL, TEMPERATURE, FINANCE
+from utils import get_logger
 
 # 设置日志器
 logger = get_logger(__name__)
@@ -224,7 +225,7 @@ def extract_sector_and_ticker(文本: str) -> Dict[str, Optional[str]]:
         return {"ticker": None, "sector": None}
 
 if __name__ == '__main__':
-    from config import setup_logging
+    from utils import setup_logging
     setup_logging()
     
     # 测试用例1: 有明确推荐标的

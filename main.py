@@ -16,7 +16,8 @@ from datetime import datetime
 import pandas as pd
 from tqdm import tqdm
 
-from config import COOKIE, STAR_ID, FINANCE, AUTO_CONVERT_TO_EXCEL, setup_logging, get_logger
+from config import COOKIE, STAR_ID, FINANCE, AUTO_CONVERT_TO_EXCEL
+from utils import setup_logging, get_logger
 from extractor.client import 获取所有今日话题 as fetch_all_today_topics, 获取所有话题 as fetch_all_topics
 from extractor.text_extractor import TextExtractor
 from llm_filter.extractor import extract_stock_info

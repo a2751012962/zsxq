@@ -13,7 +13,7 @@ import time
 import akshare as ak
 import pandas as pd
 
-from config import get_logger
+from utils import get_logger
 
 logger = get_logger(__name__)
 
@@ -355,7 +355,7 @@ def map_targets_to_tickers(targets: str) -> List[Tuple[str, Optional[str]]]:
 
 if __name__ == '__main__':
     # 测试代码
-    from config import setup_logging
+    from utils import setup_logging
     setup_logging()
     
     mapper = SmartTickerMapper()

@@ -23,7 +23,8 @@ except ImportError:
 
 import yfinance as yf
 
-from config import USE_YFINANCE, FINANCE, get_logger
+from config import USE_YFINANCE, FINANCE
+from utils import get_logger
 
 # 设置日志器
 logger = get_logger(__name__)
@@ -114,6 +115,9 @@ def get_price_from_yfinance(ticker: str) -> str:
     try:
         # 创建带有TLS指纹伪装的会话
         session = create_session()
+        if not session:
+            logger.debug("价格获取功能已禁用 (FINANCE=False)，跳过yfinance。")
+            return ""
         
         # Normalize ticker for yfinance
         if re.match(r'^\d{6}$', ticker):
@@ -188,6 +192,9 @@ def get_price_from_sina(ticker: str) -> str:
         }
         
         session = create_session()
+        if not session:
+            logger.debug("价格获取功能已禁用 (FINANCE=False)，跳过Sina API。")
+            return ""
         response = session.get(url, headers=headers, timeout=5)
         response.encoding = 'gbk'  # 新浪API使用GBK编码
         
@@ -266,6 +273,9 @@ def get_price_from_163(ticker: str) -> str:
         }
         
         session = create_session()
+        if not session:
+            logger.debug("价格获取功能已禁用 (FINANCE=False)，跳过163 API。")
+            return ""
         response = session.get(url, headers=headers, timeout=5)
         
         if response.status_code != 200:
@@ -342,6 +352,9 @@ def get_price_from_tencent(ticker: str) -> str:
         }
         
         session = create_session()
+        if not session:
+            logger.debug("价格获取功能已禁用 (FINANCE=False)，跳过Tencent API。")
+            return ""
         response = session.get(url, headers=headers, timeout=5)
         response.encoding = 'gbk'  # 腾讯API使用GBK编码
         

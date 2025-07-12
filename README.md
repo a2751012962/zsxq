@@ -72,6 +72,7 @@ crawl/
 ├── README.md                 # 项目说明文档 (v3.1)
 ├── requirements.txt          # Python依赖包
 ├── config.py                 # 全局配置 (含FINANCE开关)
+├── utils.py                  # 通用工具模块 (含日志系统)
 ├── main.py                   # 主程序入口 (支持双模式)
 │
 ├── extractor/               # 数据提取模块
@@ -259,7 +260,7 @@ USE_YFINANCE = True  # 启用yfinance价格抓取
 - **🆕 akshare数据库** 完整股票清单，智能匹配
 - **🔐 curl_cffi TLS伪装** 规避反爬虫检测
 - **⚡ 并发处理** 5线程并发，提高处理效率
-- **🔄 智能重试** 网络异常自动重试机制
+- **🔄 智能API重试**：增强了API请求的健壮性。当遇到网络波动或临时错误时，会自动进行多次尝试，并能智能区分可重试（如超时）和不可重试（如认证失败）的错误，确保数据获取的成功率。
 - **📊 进度显示** 详细的处理进度和状态显示
 - **📝 完整日志** 详细执行日志，便于调试
 - **🌟 多星球支持** 配置集中管理，一键切换
@@ -280,6 +281,7 @@ API_HOST = "api.zsxq.com"
 API_TIMEOUT = 15  # 请求超时时间（秒）
 API_RETRY_TIMES = 5  # API重试次数
 API_RETRY_DELAY = (3, 5)  # 重试延迟范围（秒）
+MAX_TOPIC_PAGES = 50 # 获取话题的最大页数，防止无限循环
 
 # OpenAI API配置 (推荐DeepSeek)
 OPENAI_API_KEY = "sk-你的API密钥"      
